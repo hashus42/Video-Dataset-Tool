@@ -8,6 +8,11 @@
 #include <QDir>
 #include <QRegularExpression>
 
+#include <QTimer>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
+#include <QLabel>
+
 #include <opencv2/opencv.hpp>
 
 QT_BEGIN_NAMESPACE
@@ -24,6 +29,7 @@ public:
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void resizeEvent(QResizeEvent *e) override;   // keep overlay centered
 
 private slots:
     void on_selectVideoBtn_clicked();
@@ -70,7 +76,20 @@ private:
     void loadConfig();
     void saveConfig() const;
 
+    // UI Beatifulization
+    // flash "Next image" label after save
+    QTimer flashTimer_;
+    QString nextLabelOrigStyle_;
+    void flashNextImageLabel();
+
+    // play/pause overlay on the video
+    QLabel *overlayIcon_ = nullptr;
+    QGraphicsOpacityEffect *overlayEffect_ = nullptr;
+    QPropertyAnimation *overlayFade_ = nullptr;
+    void showOverlayGlyph(const QString &glyph);  // "▶" or "⏸"
+
     // Helpers
+    void togglePlayPause();
     void openVideo(const QString &path);
     void updateTimerFromFPS();
     void updateInfoLabels();

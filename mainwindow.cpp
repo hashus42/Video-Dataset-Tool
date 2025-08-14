@@ -13,6 +13,53 @@ MainWindow::MainWindow(QWidget *parent)
     , ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
+    ui->playPauseBtn->setFocus();
+
+    ui->nextImageLabel->setStyleSheet(
+        "QLabel {"
+        "  background: #4287f5;"
+        "  color: white;"
+        "  border-radius: 6px;"
+        "  padding: 2px 6px;"
+        "}"
+        );
+
+    // Remember original style of the "Next image" label & prepare its timer
+    nextLabelOrigStyle_ = ui->nextImageLabel->styleSheet();
+    flashTimer_.setSingleShot(true);
+    connect(&flashTimer_, &QTimer::timeout, this, [this]() {
+        ui->nextImageLabel->setStyleSheet(nextLabelOrigStyle_);
+    });
+
+    // Build a centered overlay for play/pause glyph
+    overlayIcon_ = new QLabel(ui->videoLabel);
+    overlayIcon_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    overlayIcon_->setAlignment(Qt::AlignCenter);
+    overlayIcon_->setText(""); // start hidden
+
+    overlayEffect_ = new QGraphicsOpacityEffect(overlayIcon_);
+    overlayIcon_->setGraphicsEffect(overlayEffect_);
+    overlayEffect_->setOpacity(0.0);
+
+    overlayFade_ = new QPropertyAnimation(overlayEffect_, "opacity", this);
+    overlayFade_->setDuration(600);
+    overlayFade_->setStartValue(0.0);
+    overlayFade_->setEndValue(1.0);
+
+    // styling for the overlay (big, soft, centered)
+    overlayIcon_->setStyleSheet(
+        "QLabel {"
+        "  color: white;"
+        "  font: 700 72px 'Segoe UI', 'Ubuntu', sans-serif;"
+        "  text-align: center;"
+        "  background: transparent;"   // transparent background
+        "}"
+        );
+    overlayIcon_->hide();
+
+    // Catch keys app-wide and mouse on the video label
+    qApp->installEventFilter(this);
+    ui->videoLabel->installEventFilter(this);
 
     // Install event filter if you later want to catch more keys
     this->installEventFilter(this);
@@ -158,6 +205,60 @@ void MainWindow::tick()
 
 // ================== Helpers ==================
 
+void MainWindow::flashNextImageLabel()
+{
+    // Green chip style for 2 seconds
+    ui->nextImageLabel->setStyleSheet(
+        "QLabel {"
+        "  background: #2ecc71;"
+        "  color: white;"
+        "  border-radius: 6px;"
+        "  padding: 2px 6px;"
+        "}"
+        );
+    flashTimer_.start(500);
+}
+
+void MainWindow::showOverlayGlyph(const QString &glyph)
+{
+    if (!overlayIcon_) return;
+
+    overlayIcon_->setText(glyph);
+    overlayIcon_->adjustSize();
+
+    // Center in videoLabel
+    QSize s = overlayIcon_->size();
+    QSize parentSize = ui->videoLabel->size();
+    int x = (parentSize.width()  - s.width())  / 2;
+    int y = (parentSize.height() - s.height()) / 2;
+    overlayIcon_->move(x, y);
+
+    overlayIcon_->show();
+
+    overlayFade_->stop();
+    overlayFade_->setDuration(120);
+    overlayFade_->setStartValue(0.0);
+    overlayFade_->setEndValue(1.0);
+    overlayFade_->start();
+
+    QTimer::singleShot(450, this, [this]() {
+        overlayFade_->stop();
+        overlayFade_->setDuration(350);
+        overlayFade_->setStartValue(1.0);
+        overlayFade_->setEndValue(0.0);
+        overlayFade_->start();
+        connect(overlayFade_, &QPropertyAnimation::finished, overlayIcon_, [this]() {
+            if (overlayEffect_->opacity() == 0.0) overlayIcon_->hide();
+        });
+    });
+}
+
+void MainWindow::togglePlayPause()
+{
+    if (!cap_.isOpened()) return;   // no video loaded → ignore
+    setPlaying(!playing_);
+}
+
 void MainWindow::openVideo(const QString &path)
 {
     if (cap_.isOpened()) cap_.release();
@@ -180,7 +281,7 @@ void MainWindow::openVideo(const QString &path)
 
     // Show first frame
     seekTo(0);
-    setPlaying(false);
+    // setPlaying(false);
 }
 
 void MainWindow::updateTimerFromFPS()
@@ -230,8 +331,10 @@ void MainWindow::setPlaying(bool on)
     if (playing_) timer_.start();
     else          timer_.stop();
 
-    // Update play/pause icon tooltip for clarity
     ui->playPauseBtn->setToolTip(playing_ ? "Pause" : "Play");
+
+    // NEW: visual feedback overlay
+    showOverlayGlyph(playing_ ? "▶" : "⏸");
 }
 
 void MainWindow::displayMat(const cv::Mat &bgr)
@@ -280,13 +383,14 @@ void MainWindow::saveCurrentFrame()
     // Ensure numbering continues from largest numeric filename
     recalcNextImageFromDir();
 
-    // Save as plain numeric names: 1.jpg, 2.jpg, ...
-    const QString filename = QString::number(nextImageIndex_) + ".jpg";
-    const QString fullPath = dir.filePath(filename);
+    // Format: image_XXXX.png (zero-padded to 4 digits)
+    QString filename = QString("image_%1.png")
+                           .arg(nextImageIndex_, 4, 10, QLatin1Char('0'));
 
-    // Encode and save
-    std::vector<int> params = { cv::IMWRITE_JPEG_QUALITY, 95 };
-    bool ok = cv::imwrite(fullPath.toStdString(), currentFrameBGR_, params);
+    QString fullPath = dir.filePath(filename);
+
+    // Save as PNG
+    bool ok = cv::imwrite(fullPath.toStdString(), currentFrameBGR_);
     if (!ok)
     {
         QMessageBox::warning(this, "Save failed", "Could not save image.");
@@ -295,7 +399,10 @@ void MainWindow::saveCurrentFrame()
 
     ++nextImageIndex_;
     updateInfoLabels();
-    saveConfig(); // persist latest paths + next index
+    saveConfig();
+
+    flashNextImageLabel();
+    statusBar()->showMessage(QString("Saved: %1").arg(filename), 3000);  // shows for 4 seconds
 }
 
 void MainWindow::recalcNextImageFromDir()
@@ -377,16 +484,53 @@ void MainWindow::saveConfig() const
 
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
-    Q_UNUSED(obj);
-    // (Reserved if you want additional key handling later)
+    // Handle mouse click on the video label to toggle play/pause
+    if (obj == ui->videoLabel && event->type() == QEvent::MouseButtonPress)
+    {
+        auto *me = static_cast<QMouseEvent*>(event);
+        if (me->button() == Qt::LeftButton) {
+            togglePlayPause();
+            return true; // consume
+        }
+    }
+
+    // Handle keys globally (installed on qApp)
     if (event->type() == QEvent::KeyPress)
     {
         auto *ke = static_cast<QKeyEvent*>(event);
-        if (ke->key() == Qt::Key_S)
-        {
+
+        // SPACE => play/pause, and consume so it doesn't click focused buttons
+        if (ke->key() == Qt::Key_Space) {
+            togglePlayPause();
+            return true; // consume
+        }
+
+        // 'S' => save current frame (consume to avoid button triggering)
+        if (ke->key() == Qt::Key_S) {
             saveCurrentFrame();
-            return true;
+            return true; // consume
         }
     }
+
     return QMainWindow::eventFilter(obj, event);
 }
+
+void MainWindow::resizeEvent(QResizeEvent *e)
+{
+    QMainWindow::resizeEvent(e);
+
+    if (overlayIcon_) {
+        // Let the label compute its preferred size for the current text & style
+        overlayIcon_->adjustSize();
+
+        QSize s = overlayIcon_->size();
+        QSize parentSize = ui->videoLabel->size();
+
+        int x = (parentSize.width()  - s.width())  / 2;
+        int y = (parentSize.height() - s.height()) / 2;
+
+        overlayIcon_->move(x, y);
+    }
+}
+
+
