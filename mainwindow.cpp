@@ -60,6 +60,16 @@ MainWindow::MainWindow(QWidget *parent)
     // Catch keys app-wide and mouse on the video label
     qApp->installEventFilter(this);
     ui->videoLabel->installEventFilter(this);
+    ui->videoLabel->setContextMenuPolicy(Qt::NoContextMenu); // optional: no default menu
+    // ui->videoLabel->setToolTip("Left click: Play/Pause • Right click: Save frame");
+    // Let the video area expand with the window
+    ui->videoLabel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    ui->videoLabel->setMinimumSize(1, 1);
+    ui->videoLabel->setScaledContents(false); // we scale manually in displayMat()
+
+    // kill extra margins around the video
+    if (ui->videoGroupLayout) ui->videoGroupLayout->setContentsMargins(0,0,0,0);
+    if (ui->verticalLayout_5) ui->verticalLayout_5->setContentsMargins(0,0,0,0);
 
     // Install event filter if you later want to catch more keys
     this->installEventFilter(this);
@@ -492,6 +502,11 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             togglePlayPause();
             return true; // consume
         }
+
+        if (me->button() == Qt::RightButton) {
+            saveCurrentFrame();      // <-- capture frame on right-click
+            return true;             // consume
+        }
     }
 
     // Handle keys globally (installed on qApp)
@@ -509,6 +524,22 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         if (ke->key() == Qt::Key_S) {
             saveCurrentFrame();
             return true; // consume
+        }
+
+        // NEW: Arrow keys step one frame
+        if (ke->key() == Qt::Key_Left) {
+            if (cap_.isOpened()) {
+                setPlaying(false);      // ensure paused
+                stepRelative(-1);       // go back one frame
+            }
+            return true;
+        }
+        if (ke->key() == Qt::Key_Right) {
+            if (cap_.isOpened()) {
+                setPlaying(false);      // ensure paused
+                stepRelative(+1);       // forward one frame
+            }
+            return true;
         }
     }
 
@@ -531,6 +562,10 @@ void MainWindow::resizeEvent(QResizeEvent *e)
 
         overlayIcon_->move(x, y);
     }
+
+    //rescale the currently shown frame to fit the new size
+    if (!currentFrameBGR_.empty())
+        displayMat(currentFrameBGR_);
 }
 
 

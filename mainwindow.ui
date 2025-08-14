@@ -38,7 +38,7 @@
       <item>
        <widget class="QGroupBox" name="controlGroup">
         <property name="title">
-         <string>Controls</string>
+         <string>Controls - Left click: Play/Pause • Right click: Save frame</string>
         </property>
         <layout class="QVBoxLayout" name="verticalLayout_4">
          <item>
